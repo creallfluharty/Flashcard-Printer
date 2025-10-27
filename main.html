@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flashcard Printing Tool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- ADDED jsPDF Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Ensure the iframe fills the view */
+        .print-view-container, .print-view-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        /* Make the view containers fill the remaining height */
+        #app-body {
+            height: calc(100vh - 120px); /* Adjust based on header/nav height */
+        }
+
+        /* --- PRINT CSS IS NO LONGER NEEDED, all layout is handled by jsPDF --- */
+        @media print {
+            /* Hide the main app header and editor view when printing */
+            body > header,
+            #editor-view {
+                display: none;
+            }
+
+            /* Make the main content area fill the page */
+            #app-body {
+                height: 100%;
+                overflow: visible;
+            }
+
+            /* Make the active print view fill the page */
+            .print-view-container:not(.hidden) {
+                display: block;
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                padding: 0;
+                margin: 0;
+            }
+
+            /* Ensure the iframe fills that view */
+            .print-view-container:not(.hidden) .print-view-iframe {
+                width: 100%;
+                height: 100%;
+            }
+            
+            /* Hide the other (inactive) print view */
+            .print-view-container.hidden {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 h-screen flex flex-col">
+
+    <!-- Header and Navigation -->
+    <header class="bg-white shadow-md sticky top-0 z-10">
+        <div class="container max-w-5xl mx-auto p-4 flex flex-col md:flex-row justify-between items-center">
+            <h1 class="text-2xl font-bold text-blue-700 mb-4 md:mb-0">Flashcard Printing Tool</h1>
+            <nav class="flex gap-2 rounded-lg bg-gray-100 p-1">
+                <button id="nav-editor" class="nav-btn bg-white shadow text-blue-600 py-2 px-5 rounded-md font-semibold">Editor</button>
+                <button id="nav-fronts" class="nav-btn text-gray-600 py-2 px-5 rounded-md font-semibold hover:bg-gray-200">Print Fronts</button>
+                <button id="nav-backs" class="nav-btn text-gray-600 py-2 px-5 rounded-md font-semibold hover:bg-gray-200">Print Backs</button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main id="app-body" class="flex-1 overflow-y-auto">
+        
+        <!-- View 1: Editor -->
+        <div id="editor-view" class="view-container container max-w-5xl mx-auto p-6 md:p-10">
+            <div class="bg-white p-6 rounded-2xl shadow-lg">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center">Flashcard Editor</h2>
+                
+                <!-- Spreadsheet Header -->
+                <div class="grid grid-cols-[1fr_1fr_auto] gap-4 px-4 py-2 bg-gray-100 rounded-t-lg font-semibold text-gray-700">
+                    <div>Front</div>
+                    <div>Back</div>
+                    <div class="w-20 text-center">Actions</div>
+                </div>
+
+                <!-- Spreadsheet Body -->
+                <div id="card-editor-list" class="border border-gray-200 rounded-b-lg">
+                    <!-- Rows will be dynamically inserted here -->
+                    <p id="empty-list-msg" class="text-gray-500 text-center p-6">No cards yet. Add one below!</p>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="flex flex-col sm:flex-row gap-4 justify-center mt-8">
+                    <!-- CSV Import -->
+                    <input type="file" id="csv-import-input" accept=".csv" class="hidden">
+                    <button id="import-csv-btn" class="bg-green-600 text-white py-3 px-6 rounded-lg shadow-md hover:bg-green-700 active:bg-green-800 transition-all transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50 font-semibold">
+                        Import CSV
+                    </button>
+                    
+                    <!-- CSV Export -->
+                    <button id="export-csv-btn" class="bg-gray-700 text-white py-3 px-6 rounded-lg shadow-md hover:bg-gray-800 active:bg-gray-900 transition-all transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-opacity-50 font-semibold">
+                        Export CSV
+                    </button>
+                    
+                    <!-- Add New Card -->
+                    <button id="add-card-btn" class="bg-blue-600 text-white py-3 px-6 rounded-lg shadow-md hover:bg-blue-700 active:bg-blue-800 transition-all transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 font-semibold text-lg">
+                        + Add New Card
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- View 2: Fronts Print Preview -->
+        <div id="fronts-view" class="view-container print-view-container hidden">
+            <!-- Iframe for print preview will be injected here -->
+        </div>
+
+        <!-- View 3: Backs Print Preview -->
+        <div id="backs-view" class="view-container print-view-container hidden">
+            <!-- Iframe for print preview will be injected here -->
+        </div>
+
+    </main>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Check if jsPDF is loaded
+            if (typeof window.jspdf === 'undefined') {
+                console.error("jsPDF library not loaded!");
+                // Do not use alert()
+                const editorView = document.getElementById('editor-view');
+                if (editorView) {
+                    editorView.innerHTML = '<p class="p-8 text-center text-red-600 font-bold">Error: PDF generation library (jsPDF) could not be loaded. Please check your internet connection and reload.</p>';
+                }
+                return;
+            }
+            const { jsPDF } = window.jspdf;
+
+            // Navigation
+            const navButtons = {
+                editor: document.getElementById('nav-editor'),
+                fronts: document.getElementById('nav-fronts'),
+                backs: document.getElementById('nav-backs'),
+            };
+            const views = {
+                editor: document.getElementById('editor-view'),
+                fronts: document.getElementById('fronts-view'),
+                backs: document.getElementById('backs-view'),
+            };
+
+            // Editor Elements
+            const cardEditorList = document.getElementById('card-editor-list');
+            const addCardBtn = document.getElementById('add-card-btn');
+            const emptyListMsg = document.getElementById('empty-list-msg');
+            const importCsvBtn = document.getElementById('import-csv-btn');
+            const exportCsvBtn = document.getElementById('export-csv-btn');
+            const csvImportInput = document.getElementById('csv-import-input');
+
+            // Start with one empty card by default
+            let cards = [{ front: '', back: '' }];
+
+            // --- View Management ---
+
+            function showView(viewId) {
+                // Update nav button styles
+                for (const key in navButtons) {
+                    navButtons[key].classList.remove('bg-white', 'shadow', 'text-blue-600');
+                    navButtons[key].classList.add('text-gray-600', 'hover:bg-gray-200');
+                }
+                navButtons[viewId].classList.add('bg-white', 'shadow', 'text-blue-600');
+                navButtons[viewId].classList.remove('text-gray-600', 'hover:bg-gray-200');
+
+                // Show the correct view
+                for (const key in views) {
+                    views[key].classList.add('hidden');
+                }
+                views[viewId].classList.remove('hidden');
+
+                // Generate content if switching to a print view
+                if (viewId === 'fronts' || viewId === 'backs') {
+                    displayPrintView(viewId);
+                }
+            }
+
+            navButtons.editor.addEventListener('click', () => showView('editor'));
+            navButtons.fronts.addEventListener('click', () => showView('fronts'));
+            navButtons.backs.addEventListener('click', () => showView('backs'));
+
+            // --- Card Management (Editor) ---
+
+            function renderEditorList() {
+                cardEditorList.innerHTML = ''; // Clear the list
+
+                if (cards.length === 0) {
+                    cardEditorList.appendChild(emptyListMsg);
+                    emptyListMsg.style.display = 'block';
+                    return;
+                }
+
+                emptyListMsg.style.display = 'none';
+
+                cards.forEach((card, index) => {
+                    const rowElement = document.createElement('div');
+                    rowElement.className = 'grid grid-cols-[1fr_1fr_auto] gap-4 p-4 border-t border-gray-200 items-center';
+                    
+                    rowElement.innerHTML = `
+                        <textarea data-index="${index}" data-side="front" class="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" rows="3" placeholder="Front text...">${card.front}</textarea>
+                        <textarea data-index="${index}" data-side="back" class="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" rows="3" placeholder="Back text...">${card.back}</textarea>
+                        <div class="w-20 flex justify-center">
+                            <button data-index="${index}" class="delete-btn bg-red-500 text-white p-2 rounded-full hover:bg-red-600 transition-all" title="Delete Card">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                            </button>
+                        </div>
+                    `;
+                    cardEditorList.appendChild(rowElement);
+                });
+            }
+
+            // Event handler for adding a new card
+            function addNewCard(focusNew = false) {
+                cards.push({ front: '', back: '' });
+                renderEditorList();
+
+                if (focusNew) {
+                    const textareas = cardEditorList.querySelectorAll('textarea[data-side="front"]');
+                    if (textareas.length > 0) {
+                        textareas[textareas.length - 1].focus();
+                    }
+                }
+            }
+
+            addCardBtn.addEventListener('click', () => {
+                addNewCard(true);
+            });
+
+            // Event delegation for deleting or editing cards
+            cardEditorList.addEventListener('click', (e) => {
+                const deleteButton = e.target.closest('.delete-btn');
+                if (deleteButton) {
+                    const index = parseInt(deleteButton.dataset.index, 10);
+                    cards.splice(index, 1);
+                    renderEditorList();
+                }
+            });
+
+            // *** MODIFIED KEYDOWN LISTENER ***
+            // Listen for Ctrl+Enter
+            cardEditorList.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault(); // Always prevent default action
+
+                    // Get the index of the card being edited
+                    const targetTextarea = e.target.closest('textarea');
+                    if (!targetTextarea) return; // Exit if not on a textarea
+
+                    const currentIndex = parseInt(targetTextarea.dataset.index, 10);
+                    const totalCards = cards.length;
+
+                    if (currentIndex === totalCards - 1) {
+                        // We are on the last card, so add a new one
+                        addNewCard(true);
+                    } else {
+                        // We are not on the last card, so move to the next one
+                        const nextIndex = currentIndex + 1;
+                        const nextFrontTextarea = cardEditorList.querySelector(
+                            `textarea[data-index="${nextIndex}"][data-side="front"]`
+                        );
+                        
+                        if (nextFrontTextarea) {
+                            nextFrontTextarea.focus();
+                        }
+                    }
+                }
+            });
+
+            cardEditorList.addEventListener('input', (e) => {
+                if (e.target.tagName === 'TEXTAREA') {
+                    const index = parseInt(e.target.dataset.index, 10);
+                    const side = e.target.dataset.side;
+                    if (cards[index]) {
+                        cards[index][side] = e.target.value;
+                    }
+                }
+            });
+
+            // --- CSV Import/Export ---
+
+            importCsvBtn.addEventListener('click', () => {
+                csvImportInput.click(); // Trigger hidden file input
+            });
+
+            csvImportInput.addEventListener('change', (e) => {
+                handleCsvImport(e);
+            });
+
+            exportCsvBtn.addEventListener('click', () => {
+                exportCsv();
+            });
+
+            function escapeCsvField(field) {
+                if (field === null || field === undefined) {
+                    field = '';
+                }
+                const stringField = String(field);
+                // Escape double quotes by doubling them
+                const escaped = stringField.replace(/"/g, '""');
+                // Enclose in double quotes
+                return `"${escaped}"`;
+            }
+
+            function exportCsv() {
+                const header = '"front","back"';
+                // Filter out cards that are completely empty before exporting
+                const exportableCards = cards.filter(card => card.front.trim() !== '' || card.back.trim() !== '');
+
+                const rows = exportableCards.map(card => {
+                    return `${escapeCsvField(card.front)},${escapeCsvField(card.back)}`;
+                });
+
+                const csvContent = [header, ...rows].join('\n');
+                
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                
+                const link = document.createElement('a');
+                link.setAttribute('href', url);
+                link.setAttribute('download', 'flashcards.csv');
+                link.style.visibility = 'hidden';
+                
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            }
+
+            function handleCsvImport(event) {
+                const file = event.target.files[0];
+                if (!file) {
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const text = e.target.result;
+                    try {
+                        const newCards = [];
+                        const lines = text.split('\n').filter(line => line.trim() !== '');
+                        
+                        // Start from i=1 to skip header
+                        for (let i = 1; i < lines.length; i++) {
+                            const line = lines[i].trim();
+                            if (line.length === 0) continue;
+                            
+                            // Simple CSV parse: "front","back"
+                            if (line.startsWith('"') && line.endsWith('"')) {
+                                const innerLine = line.substring(1, line.length - 1);
+                                
+                                // Find the separator `","`
+                                // This is a simple parser; it doesn't handle escaped quotes *within* the separator
+                                const parts = innerLine.split('","');
+                                
+                                if (parts.length === 2) {
+                                    // Un-escape double quotes
+                                    const front = parts[0].replace(/""/g, '"');
+                                    const back = parts[1].replace(/""/g, '"');
+                                    newCards.push({ front, back });
+                                } else {
+                                    console.warn("Skipping malformed CSV line (could not find '\",\"' separator):", line);
+                                }
+                            } else {
+                                console.warn("Skipping malformed CSV line (does not start/end with quotes):", line);
+                            }
+                        }
+                        
+                        if (newCards.length > 0) {
+                             cards = newCards; // Replace existing cards
+                        } else {
+                             // Handle case where file is empty or only has a header
+                             cards = []; // Clear cards if import is empty
+                             if (lines.length <= 1) {
+                                 console.warn("CSV file was empty or only had a header.");
+                             } else {
+                                 console.warn("CSV file contained no valid card data.");
+                             }
+                        }
+                        renderEditorList(); // Update UI
+
+                    } catch (err) {
+                        console.error("Error parsing CSV:", err);
+                    }
+                    
+                    // Reset the file input value to allow importing the same file again
+                    event.target.value = null; 
+                };
+                reader.onerror = () => {
+                    console.error("Error reading file");
+                };
+                reader.readAsText(file);
+            }
+
+            // --- PDF Generation (Replaces HTML Generation) ---
+
+            /**
+             * Generates the PDF and displays it in the correct iframe.
+             */
+            function displayPrintView(side) {
+                try {
+                    const dataUri = generatePdfDataUri(side);
+                    const container = views[side];
+                    
+                    // Clear previous iframe
+                    container.innerHTML = ''; 
+                    
+                    const iframe = document.createElement('iframe');
+                    iframe.className = 'print-view-iframe';
+                    iframe.src = dataUri; // Set the source to the PDF data
+                    container.appendChild(iframe);
+                } catch (e) {
+                    console.error("Error generating or displaying PDF:", e);
+                    views[side].innerHTML = `<p class="p-8 text-red-600">Error generating PDF: ${e.message}</p>`;
+                }
+            }
+
+            /**
+             * Uses jsPDF to create the flashcard PDF and returns a Data URI.
+             */
+            function generatePdfDataUri(side) {
+                const isBacks = side === 'backs';
+                
+                // Initialize jsPDF: portrait, inches, letter size
+                const doc = new jsPDF({
+                    orientation: 'portrait',
+                    unit: 'in',
+                    format: 'letter'
+                });
+                
+                // Set font
+                // Note: jsPDF has limited font support. 'Inter' is not standard.
+                // We'll use a standard font like 'Helvetica'.
+                doc.setFont('Helvetica', 'normal');
+                doc.setFontSize(16);
+
+                // --- Define Layout Constants (in inches) ---
+                const PAGE_WIDTH = 8.5;
+                const PAGE_HEIGHT = 11;
+                const MARGIN = 0.5;
+                
+                const PRINT_WIDTH = PAGE_WIDTH - (2 * MARGIN); // 7.5in
+                const PRINT_HEIGHT = PAGE_HEIGHT - (2 * MARGIN); // 10in
+                
+                const CARD_WIDTH = PRINT_WIDTH / 2;  // 3.75in
+                const CARD_HEIGHT = PRINT_HEIGHT / 4; // 2.5in
+                
+                const cardsPerPage = 8;
+                const printableCards = cards.filter(card => card.front.trim() !== '' || card.back.trim() !== '');
+                const pageCount = Math.max(1, Math.ceil(printableCards.length / cardsPerPage));
+
+                for (let p = 0; p < pageCount; p++) {
+                    if (p > 0) {
+                        doc.addPage();
+                    }
+
+                    for (let i = 0; i < cardsPerPage; i++) {
+                        const cardIndex = (p * cardsPerPage) + i;
+                        const card = printableCards[cardIndex];
+                        
+                        if (!card) continue; // Skip if no card for this slot
+                        
+                        let text = isBacks ? card.back : card.front;
+                        text = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        
+                        // Calculate position
+                        const row = Math.floor(i / 2);
+                        const col = i % 2;
+                        
+                        let xCol = col;
+                        // This is the key for the backs: layout grid items right-to-left
+                        if (isBacks) {
+                            xCol = 1 - col;
+                        }
+
+                        // Calculate center X and Y for the card slot
+                        const x = MARGIN + (xCol * CARD_WIDTH) + (CARD_WIDTH / 2);
+                        const y = MARGIN + (row * CARD_HEIGHT) + (CARD_HEIGHT / 2);
+
+                        // Draw text
+                        doc.text(text, x, y, {
+                            align: 'center',
+                            baseline: 'middle',
+                            maxWidth: CARD_WIDTH - 0.5 // Leave 0.25in padding on each side
+                        });
+                    }
+                }
+                
+                // Return the PDF as a Data URI
+                return doc.output('datauristring');
+            }
+
+            // Initial render on load
+            renderEditorList();
+            showView('editor'); // Show editor by default
+        });
+    </script>
+</body>
+</html>
