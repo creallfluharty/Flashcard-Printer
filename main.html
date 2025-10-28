@@ -465,8 +465,18 @@
                 const printableCards = cards.filter(card => card.front.trim() !== '' || card.back.trim() !== '');
                 const pageCount = Math.max(1, Math.ceil(printableCards.length / cardsPerPage));
 
-                for (let p = 0; p < pageCount; p++) {
-                    if (p > 0) {
+                // *** MODIFICATION HERE ***
+                // Create an array of page indices [0, 1, 2, ..., pageCount-1]
+                const pageIndices = Array.from({ length: pageCount }, (_, i) => i);
+
+                if (isBacks) {
+                    // For backs, reverse the page order for correct double-sided printing
+                    pageIndices.reverse();
+                }
+
+                pageIndices.forEach((p, pageIndex) => {
+                    // Add a new page for every page *after* the first one being generated
+                    if (pageIndex > 0) {
                         doc.addPage();
                     }
 
@@ -476,6 +486,7 @@
                         
                         if (!card) continue; // Skip if no card for this slot
                         
+                        // Get the correct text for the side
                         let text = isBacks ? card.back : card.front;
                         text = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
                         
@@ -500,7 +511,8 @@
                             maxWidth: CARD_WIDTH - 0.5 // Leave 0.25in padding on each side
                         });
                     }
-                }
+                });
+                // *** END MODIFICATION ***
                 
                 // Return the PDF as a Data URI
                 return doc.output('datauristring');
